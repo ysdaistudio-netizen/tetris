@@ -2,17 +2,491 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>クリックカウンター</title>
-    <link rel="stylesheet" href="style.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pastel Tetris</title>
+    <style>
+        /* 全体のレイアウト設定 */
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #fafafa;
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            color: #555;
+            touch-action: none; /* スマホでのピンチインなどを無効化 */
+        }
+
+        h1 { margin: 10px 0; font-size: 24px; color: #888; }
+
+        /* ゲームコンテナ：キャンバスと情報を横並び（スマホでは縦並び） */
+        .game-container {
+            display: flex;
+            gap: 20px;
+            align-items: flex-start;
+        }
+
+        /* メインキャンバス */
+        canvas#tetris {
+            background-color: #fff;
+            border: 4px solid #eee;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            display: block;
+        }
+
+        /* サイドパネル（NEXTとスコア） */
+        .side-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .info-box {
+            background: #fff;
+            padding: 10px;
+            border: 2px solid #eee;
+            border-radius: 8px;
+            width: 100px;
+            text-align: center;
+        }
+
+        .info-label { font-size: 12px; color: #aaa; margin-bottom: 5px; }
+        .info-value { font-size: 20px; font-weight: bold; }
+
+        canvas#next {
+            background-color: #fff;
+            border: 2px solid #eee;
+            border-radius: 4px;
+        }
+
+        /* スマホ用操作ボタン */
+        .controls {
+            margin-top: 20px;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            width: 300px; /* キャンバス幅に合わせる */
+        }
+
+        .btn {
+            background-color: #eee;
+            border: none;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            font-size: 24px;
+            color: #666;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 0 4px 0 #ddd;
+            margin: 0 auto;
+        }
+
+        .btn:active {
+            box-shadow: 0 2px 0 #ddd;
+            transform: translateY(2px);
+            background-color: #e0e0e0;
+        }
+
+        /* レイアウト調整（空きスペースを作る） */
+        .spacer { width: 60px; height: 60px; }
+
+        /* レスポンシブ対応 */
+        @media (max-width: 600px) {
+            .game-container { flex-direction: row; justify-content: center; }
+            canvas#tetris { width: 200px; height: 400px; } /* 縮小表示 */
+            canvas#next { width: 60px; height: 60px; }
+            .side-panel { gap: 5px; }
+            .info-box { width: 70px; padding: 5px; }
+            .controls { width: 100%; max-width: 320px; padding-bottom: 20px; }
+        }
+    </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Click counter</h1>
-        <button id="clickButton">ここをクリック！</button>
-        <p>クリック数: <span id="countDisplay">0</span></p>
-        <button id="resetButton">リセット</button>
+
+    <h1>Pastel Tetris</h1>
+
+    <div class="game-container">
+        <!-- メインゲーム画面 -->
+        <canvas id="tetris" width="240" height="400"></canvas>
+
+        <!-- サイド情報画面 -->
+        <div class="side-panel">
+            <div class="info-box">
+                <div class="info-label">NEXT</div>
+                <canvas id="next" width="80" height="80"></canvas>
+            </div>
+            <div class="info-box">
+                <div class="info-label">SCORE</div>
+                <div id="score" class="info-value">0</div>
+            </div>
+        </div>
     </div>
-    <script src="script.js"></script>
+
+    <!-- スマホ用コントローラー -->
+    <div class="controls">
+        <button class="btn" id="btn-rotate">↻</button>
+        <div class="spacer"></div>
+        <div class="spacer"></div>
+        
+        <button class="btn" id="btn-left">←</button>
+        <button class="btn" id="btn-down">↓</button>
+        <button class="btn" id="btn-right">→</button>
+    </div>
+
+<script>
+    /**
+     * 設定と定数
+     */
+    const canvas = document.getElementById('tetris');
+    const context = canvas.getContext('2d');
+    const nextCanvas = document.getElementById('next');
+    const nextContext = nextCanvas.getContext('2d');
+    const scoreElement = document.getElementById('score');
+
+    // ブロック1マスのサイズ（px）
+    const BLOCK_SIZE = 20; // 240/12 = 20, 400/20 = 20
+    const ROW = 20;
+    const COL = 12; // 壁を含む幅（実質10マス）
+
+    // パステルカラーのパレット
+    const COLORS = [
+        null,
+        '#FFB7B2', // 赤 (Z)
+        '#FFDAC1', // オレンジ (L)
+        '#E2F0CB', // 黄色 (O) -> 薄緑系
+        '#B5EAD7', // 緑 (S)
+        '#C7CEEA', // 青 (J)
+        '#E0BBE4', // 紫 (T)
+        '#9ED2F6', // 水色 (I)
+    ];
+
+    // テトロミノの定義
+    const PIECES = [
+        [], // 0は空白
+        [[1, 1, 0], [0, 1, 1], [0, 0, 0]], // Z
+        [[0, 2, 0], [0, 2, 0], [0, 2, 2]], // L
+        [[3, 3], [3, 3]],                   // O
+        [[0, 4, 4], [4, 4, 0], [0, 0, 0]], // S
+        [[0, 5, 0], [0, 5, 0], [5, 5, 0]], // J
+        [[0, 6, 0], [6, 6, 6], [0, 0, 0]], // T
+        [[0, 7, 0, 0], [0, 7, 0, 0], [0, 7, 0, 0], [0, 7, 0, 0]] // I
+    ];
+
+    // キャンバスのスケール設定（拡大表示用）
+    context.scale(BLOCK_SIZE, BLOCK_SIZE);
+    nextContext.scale(BLOCK_SIZE, BLOCK_SIZE);
+
+    /**
+     * ゲーム変数
+     */
+    let board = createMatrix(12, 20);
+    let player = { pos: {x: 0, y: 0}, matrix: null, color: 0 };
+    let nextPieceMatrix = null;
+    let nextPieceColor = 0;
+    let dropCounter = 0;
+    let dropInterval = 1000;
+    let lastTime = 0;
+    let score = 0;
+    let isGameOver = false;
+
+    /**
+     * 関数群
+     */
+    
+    // マトリックス作成（0で初期化）
+    function createMatrix(w, h) {
+        const matrix = [];
+        while (h--) {
+            matrix.push(new Array(w).fill(0));
+        }
+        return matrix;
+    }
+
+    // 次のピースを生成
+    function createPiece(type) {
+        // 色IDを決定
+        const colorId = type; 
+        return { matrix: PIECES[type], color: colorId };
+    }
+
+    // ランダムなピースを取得
+    function getRandomPiece() {
+        const types = '1234567';
+        const type = (types[types.length * Math.random() | 0]) | 0;
+        return createPiece(type);
+    }
+
+    // 描画処理
+    function draw() {
+        // 背景クリア
+        context.fillStyle = '#fff';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+
+        // ボードの描画
+        drawMatrix(board, {x: 0, y: 0}, context);
+        // 操作中ピースの描画
+        drawMatrix(player.matrix, player.pos, context);
+    }
+
+    // 行列を描画する汎用関数
+    function drawMatrix(matrix, offset, ctx) {
+        matrix.forEach((row, y) => {
+            row.forEach((value, x) => {
+                if (value !== 0) {
+                    // パステルカラーで塗りつぶし
+                    ctx.fillStyle = COLORS[value];
+                    ctx.fillRect(x + offset.x, y + offset.y, 1, 1);
+                    
+                    // 枠線を描いてブロック感を出す
+                    ctx.lineWidth = 0.05;
+                    ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+                    ctx.strokeRect(x + offset.x, y + offset.y, 1, 1);
+                }
+            });
+        });
+    }
+
+    // NEXTブロックの描画
+    function drawNext() {
+        // クリア
+        nextContext.fillStyle = '#fff';
+        nextContext.fillRect(0, 0, nextCanvas.width, nextCanvas.height);
+
+        if (!nextPieceMatrix) return;
+
+        // 中央に配置するためのオフセット計算
+        const boxSize = 4; // NEXT画面は4x4想定
+        const xOffset = (boxSize - nextPieceMatrix[0].length) / 2;
+        const yOffset = (boxSize - nextPieceMatrix.length) / 2;
+
+        drawMatrix(nextPieceMatrix, {x: xOffset, y: yOffset}, nextContext);
+    }
+
+    // 衝突判定
+    function collide(arena, player) {
+        const [m, o] = [player.matrix, player.pos];
+        for (let y = 0; y < m.length; ++y) {
+            for (let x = 0; x < m[y].length; ++x) {
+                if (m[y][x] !== 0 &&
+                   (arena[y + o.y] && arena[y + o.y][x + o.x]) !== 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // マトリックス回転
+    function rotate(matrix, dir) {
+        for (let y = 0; y < matrix.length; ++y) {
+            for (let x = 0; x < y; ++x) {
+                [matrix[x][y], matrix[y][x]] = [matrix[y][x], matrix[x][y]];
+            }
+        }
+        if (dir > 0) matrix.forEach(row => row.reverse());
+        else matrix.reverse();
+    }
+
+    // プレイヤーの回転処理
+    function playerRotate(dir) {
+        const pos = player.pos.x;
+        let offset = 1;
+        rotate(player.matrix, dir);
+        // 壁蹴り（回転して壁にめり込んだら戻す）
+        while (collide(board, player)) {
+            player.pos.x += offset;
+            offset = -(offset + (offset > 0 ? 1 : -1));
+            if (offset > player.matrix[0].length) {
+                rotate(player.matrix, -dir);
+                player.pos.x = pos;
+                return;
+            }
+        }
+    }
+
+    // ライン消去処理
+    function arenaSweep() {
+        let rowCount = 1;
+        outer: for (let y = board.length - 1; y > 0; --y) {
+            for (let x = 1; x < board[y].length - 1; ++x) {
+                if (board[y][x] === 0) {
+                    continue outer;
+                }
+            }
+            const row = board.splice(y, 1)[0].fill(0);
+            board.unshift(row);
+            ++y;
+
+            score += rowCount * 100;
+            rowCount *= 2;
+        }
+        scoreElement.innerText = score;
+    }
+
+    // プレイヤーのリセット＆Next更新
+    function playerReset() {
+        if (nextPieceMatrix === null) {
+            // 初回
+            const p = getRandomPiece();
+            nextPieceMatrix = p.matrix;
+            nextPieceColor = p.color;
+        }
+
+        // CurrentにNextを代入
+        player.matrix = nextPieceMatrix;
+        player.color = nextPieceColor; // マトリックス内の数値を色として使うが、今回は簡易化のため描画時に値を参照
+
+        // 新しいNextを生成
+        const next = getRandomPiece();
+        nextPieceMatrix = next.matrix;
+        nextPieceColor = next.color; // 行列内の値を色IDに置換しておく必要がある
+
+        // Nextの行列内の値を色IDにする（描画関数が値を色IDとして使うため）
+        nextPieceMatrix.forEach((row, y) => row.forEach((val, x) => {
+            if(val !== 0) nextPieceMatrix[y][x] = nextPieceColor;
+        }));
+        player.matrix.forEach((row, y) => row.forEach((val, x) => {
+            if(val !== 0) player.matrix[y][x] = player.color;
+        }));
+
+
+        player.pos.y = 0;
+        player.pos.x = (board[0].length / 2 | 0) - (player.matrix[0].length / 2 | 0);
+
+        drawNext();
+
+        // ゲームオーバー判定
+        if (collide(board, player)) {
+            isGameOver = true;
+            alert("Game Over! Score: " + score);
+            board.forEach(row => row.fill(0));
+            // 壁の再構築
+            board.forEach((row, y) => {
+                 row[0] = 8; // 壁
+                 row[row.length-1] = 8; // 壁
+            });
+            // 底の壁
+            board[board.length-1].fill(8);
+            
+            score = 0;
+            scoreElement.innerText = score;
+            isGameOver = false;
+            playerReset();
+        }
+    }
+
+    // プレイヤー落下処理
+    function playerDrop() {
+        player.pos.y++;
+        if (collide(board, player)) {
+            player.pos.y--;
+            merge(board, player);
+            playerReset();
+            arenaSweep();
+        }
+        dropCounter = 0;
+    }
+
+    // プレイヤー移動処理
+    function playerMove(dir) {
+        player.pos.x += dir;
+        if (collide(board, player)) {
+            player.pos.x -= dir;
+        }
+    }
+
+    // ボードにピースを固定
+    function merge(arena, player) {
+        player.matrix.forEach((row, y) => {
+            row.forEach((value, x) => {
+                if (value !== 0) {
+                    arena[y + player.pos.y][x + player.pos.x] = value;
+                }
+            });
+        });
+    }
+
+    // ゲームループ
+    function update(time = 0) {
+        if (isGameOver) return;
+
+        const deltaTime = time - lastTime;
+        lastTime = time;
+
+        dropCounter += deltaTime;
+        if (dropCounter > dropInterval) {
+            playerDrop();
+        }
+
+        draw();
+        requestAnimationFrame(update);
+    }
+
+    /**
+     * 初期化とイベントリスナー
+     */
+
+    // 壁の初期化
+    function initBoard() {
+        // 左壁、右壁、床を作る
+        board.forEach((row, y) => {
+             row[0] = 8; // 壁として扱う値（色は定義外なので黒っぽくなるが描画ロジックで無視orグレーに）
+             row[row.length-1] = 8;
+        });
+        board[board.length-1].fill(8);
+        
+        // 壁の色をグレーに設定（COLORS[8]）
+        COLORS[8] = '#ddd'; 
+    }
+
+    initBoard();
+    playerReset();
+    update();
+
+    // キーボード操作
+    document.addEventListener('keydown', event => {
+        if (event.keyCode === 37) {
+            playerMove(-1);
+        } else if (event.keyCode === 39) {
+            playerMove(1);
+        } else if (event.keyCode === 40) {
+            playerDrop();
+        } else if (event.keyCode === 38) {
+            playerRotate(1);
+        }
+    });
+
+    // タッチボタン操作（スマホ対応）
+    const btnLeft = document.getElementById('btn-left');
+    const btnRight = document.getElementById('btn-right');
+    const btnDown = document.getElementById('btn-down');
+    const btnRotate = document.getElementById('btn-rotate');
+
+    // タッチイベントのヘルパー（長押し対応ではなくクリック連打形式）
+    function addTouchHandler(element, action) {
+        element.addEventListener('touchstart', (e) => {
+            e.preventDefault(); // ダブルタップズームなどを防止
+            action();
+        });
+        element.addEventListener('click', (e) => {
+            action();
+        });
+    }
+
+    addTouchHandler(btnLeft, () => playerMove(-1));
+    addTouchHandler(btnRight, () => playerMove(1));
+    addTouchHandler(btnDown, () => playerDrop());
+    addTouchHandler(btnRotate, () => playerRotate(1));
+
+</script>
 </body>
 </html>
